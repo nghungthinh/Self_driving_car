@@ -1,0 +1,17 @@
+numpy
+time
+os
+argparse
+cv2
+pycuda
+
+#Thư viện xữ lý ảnh
+onnxruntime
+tensorrt
+tensorflow
+
+#Thư viện điều khiển động cơ Servo
+Adafruit_PCA9685 
+
+#Thư Viện UART
+serial
