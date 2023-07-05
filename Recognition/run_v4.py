@@ -15,7 +15,7 @@ from utils.display import set_display, show_fps
 from utils.visualization import BBoxVisualization
 from utils.yolo_with_plugins import TrtYOLO
 
-from Controller import *
+from controller_sign import *
 from Motor import *
 
 session_lane = onnxruntime.InferenceSession('../model/Pretrain_3.onnx', None, providers=['CUDAExecutionProvider'])
@@ -26,6 +26,7 @@ input_name_sign = session_sign.get_inputs()[0].name
 
 Motor = Motor_DC()
 Servo = Motor_Servo()
+
 def gstreamer_pipeline(
     sensor_id=0,
     capture_width=640,
@@ -68,7 +69,7 @@ def road_lines(image, session, inputname):
 	# Crop ảnh lại, lấy phần ảnh có làn đườngs
 	image = image[200:, :, :]
 	small_img = cv2.resize(image, ((image.shape[1]//4, image.shape[0]//4)))
-	cv2.imshow('image',small_img)
+	#cv2.imshow('image',small_img)
 	small_img = small_img/255
 	small_img = np.array(small_img, dtype=np.float32)
 	small_img = small_img[None, :, :, :]
@@ -76,7 +77,6 @@ def road_lines(image, session, inputname):
 	prediction = np.squeeze(prediction)
 	prediction = np.where(prediction < 0.5, 0, 255)
 	prediction = prediction.astype(np.uint8)
-
 	return prediction
 
 def Classify(img,inputname,session):
@@ -89,16 +89,9 @@ def Classify(img,inputname,session):
     cll = np.argmax(prediction)
 
     return cll
-def Get_name(predictions):
-    if str(predictions) == "0":
-        name_class = "Left"
-    if str(predictions) == "1":
-        name_class = "Right"
-    if str(predictions) == "2":
-        name_class = "Stop"
-    if str(predictions) == "3":
-        name_class = "Straight"
-    return name_class
+def get_name(id):
+    name_cls = ["Left", "Right", "Stop", "Straight"]
+    return name_cls[int(id)]
    
 def parse_args():
     """Parse input arguments."""
@@ -124,10 +117,46 @@ def parse_args():
         help='inference with letterboxed image [False]')
     args = parser.parse_args()
     return args
-
-
+args = parse_args()
+def timer(set_time, angle, speed):
+    start_timer = time.time()
+    while time.time() - start_timer < set_time:
+        Servo.Rotate_angle(0,angle)
+        Motor.setSpeed_pwm(speed)
+def inference_yolov4(interpreter, img):
+    boxes, confs, clss = interpreter.detect(img, args.conf_thresh)
+    if len(boxes) != 0:
+        x_min = int(boxes[0][0])
+        y_min = int(boxes[0][1])
+        x_max = int(boxes[0][2])
+        y_max = int(boxes[0][3])
+        
+        cls_img = img[y_min:y_max,x_min:x_max]
+        cll = Classify(cls_img,input_name_sign,session_sign)
+        name_class = get_name(cll)
+        bbox_size = (x_max - x_min) * (y_max - y_min)
+        
+        cv2.rectangle(img,(x_min,y_min),(x_max,y_max),(0,0,255),2)
+                    # cv2.putText(img,name_class, (x_min,y_min-10),cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 255), 1)
+                    # cv2.putText(img,str(np.round(confs[0],2)), (x_min+len(name_class)*2+40,y_min-10),cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 255), 1)
+        cv2.putText(img,str("Class : ") + str(name_class),(11,80),cv2.FONT_HERSHEY_PLAIN, 1, (32, 32, 32), 4,cv2.LINE_AA)
+        cv2.putText(img,str("Class : ") + str(name_class),(10,80),cv2.FONT_HERSHEY_PLAIN, 1, (240, 240, 240), 1,cv2.LINE_AA)
+        cv2.putText(img,str("Conf : ") + str(np.round(confs[0],2)),(11,100),cv2.FONT_HERSHEY_PLAIN, 1, (255, 0, 0), 2,cv2.LINE_AA)
+        cv2.putText(img,str("Conf : ") + str(np.round(confs[0],2)),(10,100),cv2.FONT_HERSHEY_PLAIN, 1, (240, 240, 240), 1,cv2.LINE_AA)
+        # cv2.rectangle(img,(x_min,y_min),(x_max,y_max),(0,0,255),2)
+        # cv2.putText(img,name_class, (x_min,y_min-10),cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 255), 1)
+        # cv2.putText(img,str(np.round(confs[0],2)), (x_min+len(name_class)*2+40,y_min-10),cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 255), 1)
+        confs_o = confs[0]
+    else:
+        cv2.putText(img,str("Class : ") + str("None"),(11,80),cv2.FONT_HERSHEY_PLAIN, 1, (32, 32, 32), 4,cv2.LINE_AA)
+        cv2.putText(img,str("Class : ") + str("None"),(10,80),cv2.FONT_HERSHEY_PLAIN, 1, (240, 240, 240), 1,cv2.LINE_AA)
+        cv2.putText(img,str("Conf : ") + str("None"),(11,100),cv2.FONT_HERSHEY_PLAIN, 1, (32, 32, 32), 4,cv2.LINE_AA)
+        cv2.putText(img,str("Conf : ") + str("None"),(10,100),cv2.FONT_HERSHEY_PLAIN, 1, (240, 240, 240), 1,cv2.LINE_AA)
+        name_class = "None"
+        bbox_size = 0
+        confs_o = 0
+    return bbox_size, name_class, confs_o
 def main():
-    args = parse_args()
     print("Category: ",args.category_num)
     if args.category_num <= 0:
         raise SystemExit('ERROR: bad category_num (%d)!' % args.category_num)
@@ -139,6 +168,8 @@ def main():
     # vis = BBoxVisualization(cls_dict)
     trt_yolo = TrtYOLO(args.model, args.category_num, args.letter_box)
     cam = cv2.VideoCapture(gstreamer_pipeline(flip_method=0), cv2.CAP_GSTREAMER)
+    imz = cv2.VideoWriter('/home/jetson/Desktop/Capstone_Project/video/report.avi', cv2.VideoWriter_fourcc('M','J','P','G'), 30, (640,360))
+
     if cam.isOpened():
         try:
             full_scrn = False
@@ -150,39 +181,41 @@ def main():
                 copy_image = np.copy(img)
                 segmentation = road_lines(copy_image, session=session_lane, inputname=input_name_lane)
                 segmentation = remove_small_contours(segmentation)
-
-                controller = Controller(segmentation)
+                bbox_size, cll, confs = inference_yolov4(trt_yolo, img)
+                print("===========")
+                print("BBox size: ", bbox_size)
+                print("Class name: ", cll)
+                print("Confs: ", confs)
+                controller = Controller(segmentation, bbox_size, cll, confs)
                 angle, speed = controller()
-
-                Servo.Rotate_angle(0,angle)
-                Motor.setSpeed_pwm(speed)
-
-                boxes, confs, clss = trt_yolo.detect(img, args.conf_thresh)
-                if len(boxes) != 0:
-                    x_min = int(boxes[0][0])
-                    y_min = int(boxes[0][1])
-                    x_max = int(boxes[0][2])
-                    y_max = int(boxes[0][3])
-                    
-                    cls_img = img[y_min:y_max,x_min:x_max]
-                    cll = Classify(cls_img,input_name_sign,session_sign)
-                    name_class = Get_name(cll)
-
-                    cv2.rectangle(img,(x_min,y_min),(x_max,y_max),(0,0,255),2)
-                    cv2.putText(img,name_class, (x_min,y_min-10),cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 255), 1)
-                    cv2.putText(img,str(np.round(confs[0],2)), (x_min+len(name_class)*2+40,y_min-10),cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 255), 1)
-                else:
-                    cll = "None"
-
+                cv2.putText(img,str("Angle : ") + str(angle),(11,40),cv2.FONT_HERSHEY_PLAIN, 1, (32, 32, 32), 4,cv2.LINE_AA)
+                cv2.putText(img,str("Angle : ") + str(angle),(10,40),cv2.FONT_HERSHEY_PLAIN, 1, (240, 240, 240), 1,cv2.LINE_AA)
+                cv2.putText(img,str("Speed : ") + str(speed),(11,60),cv2.FONT_HERSHEY_PLAIN, 1, (32, 32, 32), 4,cv2.LINE_AA)
+                cv2.putText(img,str("Speed : ") + str(speed),(10,60),cv2.FONT_HERSHEY_PLAIN, 1, (240, 240, 240), 1,cv2.LINE_AA)
+                
+                # Servo.Rotate_angle(0,angle)
+                # Motor.setSpeed_pwm(speed)
+                
+                # if cll != "None":
+                #     if cll == "Stop":
+                #         timer(7, angle, 0)
+                #     else:
+                #         timer(2, 90, 60)
+                #         timer(2, angle, speed)
+                # else:
+                #     Servo.Rotate_angle(0,angle)
+                #     Motor.setSpeed_pwm(speed)
                 img = show_fps(img, fps)
                 toc = time.time()
                 curr_fps = 1.0 / (toc - tic)
                 # calculate an exponentially decaying average of fps number
                 fps = curr_fps if fps == 0.0 else (fps*0.95 + curr_fps*0.05)
-                tic = toc
+                print("FPS: ", fps)
+                #tic = toc
 
                 cv2.imshow("Show main image ",img)
-                cv2.imshow("segmentation ",segmentation)
+                imz.write(img)
+                #cv2.imshow("segmentation ",segmentation)
                 keyCode = cv2.waitKey(10) & 0xFF
                 if keyCode == 27 or keyCode == ord('q'):
                     Servo.Rotate_angle(0,90)
